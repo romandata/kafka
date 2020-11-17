@@ -40,6 +40,7 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.WritableByteChannel;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Iterator;
@@ -59,11 +60,7 @@ public class NioEchoServer extends Thread {
     public enum MetricType {
         TOTAL, RATE, AVG, MAX;
 
-        private final String metricNameSuffix;
-
-        private MetricType() {
-            metricNameSuffix = "-" + name().toLowerCase(Locale.ROOT);
-        }
+        private final String metricNameSuffix = "-" + name().toLowerCase(Locale.ROOT);
 
         public String metricNameSuffix() {
             return metricNameSuffix;
@@ -117,10 +114,13 @@ public class NioEchoServer extends Thread {
                     credentialCache.createCache(mechanism, ScramCredential.class);
             }
         }
+        LogContext logContext = new LogContext();
         if (channelBuilder == null)
-            channelBuilder = ChannelBuilders.serverChannelBuilder(listenerName, false, securityProtocol, config, credentialCache, tokenCache, time);
+            channelBuilder = ChannelBuilders.serverChannelBuilder(listenerName, false,
+                    securityProtocol, config, credentialCache, tokenCache, time, logContext);
         this.metrics = new Metrics();
-        this.selector = new Selector(10000, failedAuthenticationDelayMs, metrics, time, "MetricGroup", channelBuilder, new LogContext());
+        this.selector = new Selector(10000, failedAuthenticationDelayMs, metrics, time,
+                "MetricGroup", channelBuilder, logContext);
         acceptorThread = new AcceptorThread();
         this.time = time;
     }
@@ -219,7 +219,7 @@ public class NioEchoServer extends Thread {
                         selector.close(channel.id());
                 }
 
-                List<NetworkReceive> completedReceives = selector.completedReceives();
+                Collection<NetworkReceive> completedReceives = selector.completedReceives();
                 for (NetworkReceive rcv : completedReceives) {
                     KafkaChannel channel = channel(rcv.source());
                     if (!maybeBeginServerReauthentication(channel, rcv, time)) {
@@ -312,9 +312,10 @@ public class NioEchoServer extends Thread {
     }
 
     private class AcceptorThread extends Thread {
-        public AcceptorThread() throws IOException {
+        public AcceptorThread() {
             setName("acceptor");
         }
+        @Override
         public void run() {
             try {
                 java.nio.channels.Selector acceptSelector = java.nio.channels.Selector.open();

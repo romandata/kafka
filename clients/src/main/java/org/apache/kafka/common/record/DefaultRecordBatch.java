@@ -16,7 +16,9 @@
  */
 package org.apache.kafka.common.record;
 
+import org.apache.kafka.common.InvalidRecordException;
 import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.errors.CorruptRecordException;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.utils.ByteBufferOutputStream;
 import org.apache.kafka.common.utils.ByteUtils;
@@ -144,11 +146,11 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
     @Override
     public void ensureValid() {
         if (sizeInBytes() < RECORD_BATCH_OVERHEAD)
-            throw new InvalidRecordException("Record batch is corrupt (the size " + sizeInBytes() +
+            throw new CorruptRecordException("Record batch is corrupt (the size " + sizeInBytes() +
                     " is smaller than the minimum allowed overhead " + RECORD_BATCH_OVERHEAD + ")");
 
         if (!isValid())
-            throw new InvalidRecordException("Record is corrupt (stored crc = " + checksum()
+            throw new CorruptRecordException("Record is corrupt (stored crc = " + checksum()
                     + ", computed crc = " + computeChecksum() + ")");
     }
 
@@ -253,11 +255,14 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
         return buffer.getInt(PARTITION_LEADER_EPOCH_OFFSET);
     }
 
-    private CloseableIterator<Record> compressedIterator(BufferSupplier bufferSupplier, boolean skipKeyValue) {
+    public DataInputStream recordInputStream(BufferSupplier bufferSupplier) {
         final ByteBuffer buffer = this.buffer.duplicate();
         buffer.position(RECORDS_OFFSET);
-        final DataInputStream inputStream = new DataInputStream(compressionType().wrapForInput(buffer, magic(),
-            bufferSupplier));
+        return new DataInputStream(compressionType().wrapForInput(buffer, magic(), bufferSupplier));
+    }
+
+    private CloseableIterator<Record> compressedIterator(BufferSupplier bufferSupplier, boolean skipKeyValue) {
+        final DataInputStream inputStream = recordInputStream(bufferSupplier);
 
         if (skipKeyValue) {
             // this buffer is used to skip length delimited fields like key, value, headers
@@ -438,22 +443,22 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
                 producerEpoch, baseSequence, isTransactional, isControlRecord, partitionLeaderEpoch, 0);
     }
 
-    static void writeHeader(ByteBuffer buffer,
-                            long baseOffset,
-                            int lastOffsetDelta,
-                            int sizeInBytes,
-                            byte magic,
-                            CompressionType compressionType,
-                            TimestampType timestampType,
-                            long firstTimestamp,
-                            long maxTimestamp,
-                            long producerId,
-                            short epoch,
-                            int sequence,
-                            boolean isTransactional,
-                            boolean isControlBatch,
-                            int partitionLeaderEpoch,
-                            int numRecords) {
+    public static void writeHeader(ByteBuffer buffer,
+                                   long baseOffset,
+                                   int lastOffsetDelta,
+                                   int sizeInBytes,
+                                   byte magic,
+                                   CompressionType compressionType,
+                                   TimestampType timestampType,
+                                   long firstTimestamp,
+                                   long maxTimestamp,
+                                   long producerId,
+                                   short epoch,
+                                   int sequence,
+                                   boolean isTransactional,
+                                   boolean isControlBatch,
+                                   int partitionLeaderEpoch,
+                                   int numRecords) {
         if (magic < RecordBatch.CURRENT_MAGIC_VALUE)
             throw new IllegalArgumentException("Invalid magic value " + magic);
         if (firstTimestamp < 0 && firstTimestamp != NO_TIMESTAMP)
@@ -482,6 +487,8 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
     @Override
     public String toString() {
         return "RecordBatch(magic=" + magic() + ", offsets=[" + baseOffset() + ", " + lastOffset() + "], " +
+                "sequence=[" + baseSequence() + ", " + lastSequence() + "], " +
+                "isTransactional=" + isTransactional() + ", isControlBatch=" + isControlBatch() + ", " +
                 "compression=" + compressionType() + ", timestampType=" + timestampType() + ", crc=" + checksum() + ")";
     }
 
@@ -532,16 +539,16 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
         return RECORD_BATCH_OVERHEAD + DefaultRecord.recordSizeUpperBound(key, value, headers);
     }
 
-    public static int incrementSequence(int baseSequence, int increment) {
-        if (baseSequence > Integer.MAX_VALUE - increment)
-            return increment - (Integer.MAX_VALUE - baseSequence) - 1;
-        return baseSequence + increment;
+    public static int incrementSequence(int sequence, int increment) {
+        if (sequence > Integer.MAX_VALUE - increment)
+            return increment - (Integer.MAX_VALUE - sequence) - 1;
+        return sequence + increment;
     }
 
-    public static int decrementSequence(int baseSequence, int decrement) {
-        if (baseSequence < decrement)
-            return Integer.MAX_VALUE - (decrement - baseSequence) + 1;
-        return baseSequence - decrement;
+    public static int decrementSequence(int sequence, int decrement) {
+        if (sequence < decrement)
+            return Integer.MAX_VALUE - (decrement - sequence) + 1;
+        return sequence - decrement;
     }
 
     private abstract class RecordIterator implements CloseableIterator<Record> {
